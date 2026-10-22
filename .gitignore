@@ -1,0 +1,4 @@
+.zig-cache/
+zig-out/
+docker
+docker-compose.yml
