@@ -465,7 +465,7 @@ test "encode and decode primitives" {
     try e.string("my-stream");
     try e.string(null);
     try e.bytes("abc");
-    try e.properties(&.{.{ .key = "x-max-age", .value = "1h" }});
+    try e.properties(&.{.{ .key = "max-age", .value = "1h" }});
     try OffsetSpec.encode(.{ .timestamp = -5 }, &e);
     const frame = b.finish();
 
@@ -479,7 +479,7 @@ test "encode and decode primitives" {
     try testing.expectEqual(@as(?[]const u8, null), try d.string());
     try testing.expectEqualStrings("abc", (try d.bytes()).?);
     try testing.expectEqual(@as(u32, 1), try d.int(u32));
-    try testing.expectEqualStrings("x-max-age", (try d.string()).?);
+    try testing.expectEqualStrings("max-age", (try d.string()).?);
     try testing.expectEqualStrings("1h", (try d.string()).?);
     try testing.expectEqual(OffsetSpec{ .timestamp = -5 }, (try OffsetSpec.decode(&d)).?);
     try testing.expectEqual(@as(usize, 0), d.remaining());

@@ -54,14 +54,18 @@ test "connect, server properties and stream lifecycle" {
     var buf: [64]u8 = undefined;
     const stream = uniqueName(&buf, "lifecycle");
     try testing.expect(!try client.streamExists(stream));
-    try client.createStream(stream, .{
+    const options: rs.StreamOptions = .{
         .max_length_bytes = 10 * 1024 * 1024,
         .max_age = .fromSeconds(3600),
         .max_segment_size_bytes = 1024 * 1024,
         .leader_locator = .balanced,
         .filter_size_bytes = 32,
-    });
-    try testing.expectError(error.StreamAlreadyExists, client.createStream(stream, .{}));
+    };
+    try client.createStream(stream, options);
+    try testing.expectError(error.StreamAlreadyExists, client.createStream(stream, options));
+    // Same name with other arguments: RabbitMQ refuses it, as it does an
+    // AMQP queue declared again with different arguments.
+    try testing.expectError(error.PreconditionFailed, client.createStream(stream, .{}));
     try testing.expect(try client.streamExists(stream));
 
     var m = try client.metadata(&.{ stream, "does-not-exist-stream" });
@@ -76,6 +80,35 @@ test "connect, server properties and stream lifecycle" {
     try client.deleteStream(stream);
     try testing.expectError(error.StreamDoesNotExist, client.deleteStream(stream));
     try testing.expectError(error.StreamDoesNotExist, client.streamStats(stream));
+}
+
+test "size retention given at creation is applied" {
+    const env = try newEnv();
+    defer env.deinit();
+    var buf: [64]u8 = undefined;
+    const stream = uniqueName(&buf, "retention");
+    // Small segments under a small cap: once a few segments have rolled over,
+    // RabbitMQ drops the oldest and the first chunk moves past offset 0. If
+    // the arguments were ignored it would stay at 0, as nothing else trims it.
+    try env.createStream(stream, .{
+        .max_length_bytes = 200 * 1024,
+        .max_segment_size_bytes = 50 * 1024,
+    });
+    defer env.deleteStream(stream) catch {};
+
+    const publisher = try env.createPublisher(stream, .{});
+    const body: [1024]u8 = @splat('r');
+    for (0..2000) |_| _ = try publisher.sendRaw(&body, .{});
+    try publisher.waitForConfirms(timeout);
+    publisher.close();
+
+    var first: i64 = 0;
+    for (0..50) |_| {
+        first = (try env.streamStats(stream)).first_chunk_id;
+        if (first > 0) break;
+        try testing.io.sleep(.fromMilliseconds(100), .awake);
+    }
+    try testing.expect(first > 0);
 }
 
 test "authentication failure is reported" {

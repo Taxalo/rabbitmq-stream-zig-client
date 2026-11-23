@@ -702,40 +702,73 @@ pub const LeaderLocator = enum {
 
 /// Arguments of a new stream. Retention is applied per segment, so a
 /// stream keeps at least one segment that contains messages.
+///
+/// The stream protocol takes the argument names without the `x-` prefix
+/// that AMQP queue declarations use; RabbitMQ then stores them as the `x-`
+/// queue arguments. A name it doesn't know, `x-max-age` included, is
+/// ignored without an error.
 pub const StreamOptions = struct {
-    /// `x-max-length-bytes`: maximum size of the stream.
+    /// `max-length-bytes`: maximum size of the stream.
     max_length_bytes: ?u64 = null,
-    /// `x-max-age`: maximum age of the messages, rounded to seconds.
+    /// `max-age`: maximum age of the messages, rounded to seconds.
     max_age: ?Io.Duration = null,
-    /// `x-stream-max-segment-size-bytes`: size of the segment files.
+    /// `stream-max-segment-size-bytes`: size of the segment files.
     max_segment_size_bytes: ?u64 = null,
-    /// `x-queue-leader-locator`
+    /// `queue-leader-locator`
     leader_locator: ?LeaderLocator = null,
-    /// `x-initial-cluster-size`
+    /// `initial-cluster-size`
     initial_cluster_size: ?u32 = null,
-    /// `x-stream-filter-size-bytes`: bloom filter size, from 16 to 255.
+    /// `stream-filter-size-bytes`: bloom filter size, from 16 to 255.
     filter_size_bytes: ?u8 = null,
-    /// Additional raw arguments.
+    /// Additional raw arguments, sent as they are (so without `x-`).
     arguments: []const Property = &.{},
 
     /// Builds the argument list into `buf`, using `scratch` for the
     /// formatted numbers.
     pub fn toArguments(o: StreamOptions, buf: *std.ArrayList(Property), gpa: Allocator, scratch: *[6][24]u8) Allocator.Error!void {
-        if (o.max_length_bytes) |v| try buf.append(gpa, .{ .key = "x-max-length-bytes", .value = fmtInt(&scratch[0], v) });
+        if (o.max_length_bytes) |v| try buf.append(gpa, .{ .key = "max-length-bytes", .value = fmtInt(&scratch[0], v) });
         if (o.max_age) |v| {
             const s = std.fmt.bufPrint(&scratch[1], "{d}s", .{@max(0, v.toSeconds())}) catch unreachable;
-            try buf.append(gpa, .{ .key = "x-max-age", .value = s });
+            try buf.append(gpa, .{ .key = "max-age", .value = s });
         }
-        if (o.max_segment_size_bytes) |v| try buf.append(gpa, .{ .key = "x-stream-max-segment-size-bytes", .value = fmtInt(&scratch[2], v) });
-        if (o.leader_locator) |v| try buf.append(gpa, .{ .key = "x-queue-leader-locator", .value = v.value() });
-        if (o.initial_cluster_size) |v| try buf.append(gpa, .{ .key = "x-initial-cluster-size", .value = fmtInt(&scratch[3], v) });
-        if (o.filter_size_bytes) |v| try buf.append(gpa, .{ .key = "x-stream-filter-size-bytes", .value = fmtInt(&scratch[4], v) });
+        if (o.max_segment_size_bytes) |v| try buf.append(gpa, .{ .key = "stream-max-segment-size-bytes", .value = fmtInt(&scratch[2], v) });
+        if (o.leader_locator) |v| try buf.append(gpa, .{ .key = "queue-leader-locator", .value = v.value() });
+        if (o.initial_cluster_size) |v| try buf.append(gpa, .{ .key = "initial-cluster-size", .value = fmtInt(&scratch[3], v) });
+        if (o.filter_size_bytes) |v| try buf.append(gpa, .{ .key = "stream-filter-size-bytes", .value = fmtInt(&scratch[4], v) });
         try buf.appendSlice(gpa, o.arguments);
     }
 };
 
 fn fmtInt(buf: *[24]u8, v: anytype) []const u8 {
     return std.fmt.bufPrint(buf, "{d}", .{v}) catch unreachable;
+}
+
+test "StreamOptions uses the argument names of the stream protocol" {
+    var args: std.ArrayList(Property) = .empty;
+    defer args.deinit(std.testing.allocator);
+    var scratch: [6][24]u8 = undefined;
+    const options: StreamOptions = .{
+        .max_length_bytes = 1000,
+        .max_age = .fromSeconds(3600),
+        .max_segment_size_bytes = 500,
+        .leader_locator = .least_leaders,
+        .initial_cluster_size = 1,
+        .filter_size_bytes = 32,
+    };
+    try options.toArguments(&args, std.testing.allocator, &scratch);
+    const expected = [_]Property{
+        .{ .key = "max-length-bytes", .value = "1000" },
+        .{ .key = "max-age", .value = "3600s" },
+        .{ .key = "stream-max-segment-size-bytes", .value = "500" },
+        .{ .key = "queue-leader-locator", .value = "least-leaders" },
+        .{ .key = "initial-cluster-size", .value = "1" },
+        .{ .key = "stream-filter-size-bytes", .value = "32" },
+    };
+    try std.testing.expectEqual(expected.len, args.items.len);
+    for (expected, args.items) |want, got| {
+        try std.testing.expectEqualStrings(want.key, got.key);
+        try std.testing.expectEqualStrings(want.value, got.value);
+    }
 }
 
 pub fn createStream(c: *Client, stream: []const u8, options: StreamOptions) Error!void {
